@@ -8,10 +8,11 @@
 import SwiftUI
 
 @main
-struct rememberMeApp: App {
+struct RememberMeApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()
+                .preferredColorScheme(.light)
         }
     }
 }
