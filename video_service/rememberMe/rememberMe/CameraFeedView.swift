@@ -16,17 +16,13 @@ struct CameraFeedView: View {
     var body: some View {
         GeometryReader { geometry in
             ZStack {
-                // Make camera preview fill the screen
-                Color.black.edgesIgnoringSafeArea(.all)
-                
+                // Camera preview with processed image overlay
                 CameraPreviewLayer(viewModel: viewModel)
-                    .frame(width: geometry.size.width, height: geometry.size.height)
-                    .edgesIgnoringSafeArea(.all)
+                    .ignoresSafeArea()
                 
+                // Status indicators
                 VStack {
                     Spacer()
-                    
-                    // Status indicators
                     HStack {
                         Circle()
                             .fill(viewModel.isConnectedToServer ? Color.green : Color.red)
@@ -50,6 +46,7 @@ struct CameraFeedView: View {
                 }
             }
         }
+        .ignoresSafeArea()
         .onAppear {
             print("CameraFeedView appeared")
             viewModel.startSession()

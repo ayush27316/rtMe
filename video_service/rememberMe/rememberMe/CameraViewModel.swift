@@ -113,6 +113,8 @@ class CameraViewModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSampl
             sendFrameToServer(image: image)
         }
         
+    @Published var processedImage: UIImage?
+        
         private func sendFrameToServer(image: UIImage) {
             guard let url = URL(string: "https://0a02-132-205-229-214.ngrok-free.app/receive_image") else {
                 DispatchQueue.main.async {
@@ -145,29 +147,33 @@ class CameraViewModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSampl
             }
             
             URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
-                DispatchQueue.main.async {
-                    if let error = error {
-                        self?.error = "Network error: \(error.localizedDescription)"
-                        self?.isConnectedToServer = false
-                        return
-                    }
-                    
-                    guard let httpResponse = response as? HTTPURLResponse else {
-                        self?.error = "Invalid server response"
-                        self?.isConnectedToServer = false
-                        return
-                    }
-                    
-                    if httpResponse.statusCode == 200 {
-                        self?.isConnectedToServer = true
-                        if let data = data, let responseString = String(data: data, encoding: .utf8) {
-                            self?.lastServerResponse = responseString
+                        DispatchQueue.main.async {
+                            if let error = error {
+                                self?.error = "Network error: \(error.localizedDescription)"
+                                self?.isConnectedToServer = false
+                                return
+                            }
+                            
+                            guard let httpResponse = response as? HTTPURLResponse else {
+                                self?.error = "Invalid server response"
+                                self?.isConnectedToServer = false
+                                return
+                            }
+                            
+                            if httpResponse.statusCode == 200 {
+                                self?.isConnectedToServer = true
+                                if let data = data,
+                                   let jsonResponse = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                                   let processedImageBase64 = jsonResponse["processed_image"] as? String,
+                                   let imageData = Data(base64Encoded: processedImageBase64),
+                                   let processedUIImage = UIImage(data: imageData) {
+                                    self?.processedImage = processedUIImage
+                                }
+                            } else {
+                                self?.error = "Server error: \(httpResponse.statusCode)"
+                                self?.isConnectedToServer = false
+                            }
                         }
-                    } else {
-                        self?.error = "Server error: \(httpResponse.statusCode)"
-                        self?.isConnectedToServer = false
-                    }
+                    }.resume()
                 }
-            }.resume()
-        }
-    }
+            }
