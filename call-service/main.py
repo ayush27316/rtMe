@@ -14,6 +14,17 @@ from fastapi.websockets import WebSocketDisconnect
 from twilio.twiml.voice_response import VoiceResponse, Connect, Say, Stream
 from dotenv import load_dotenv
 
+from mongoDB_connection import (
+    create_user,
+    create_conversation_context,
+    update_user_context,
+    get_user_context,
+    get_conversation_context,
+    close_db_connection
+)
+
+
+
 load_dotenv()
 
 # Configuration
@@ -105,6 +116,7 @@ async def handle_media_stream(websocket: WebSocket):
                 print("Client disconnected.")
                 if openai_ws.open:
                     await openai_ws.close()
+
 
         async def send_to_twilio():
             """Receive events from the OpenAI Realtime API, send audio back to Twilio."""
@@ -227,6 +239,11 @@ async def initialize_session(openai_ws):
     # Uncomment the next line to have the AI speak first
     # await send_initial_conversation_item(openai_ws)
 
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=PORT)
+    close_db_connection()
+    print("Closed connection to server and MongoDB Atlas database.")
+
