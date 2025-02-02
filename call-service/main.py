@@ -20,7 +20,7 @@ from mongoDB_connection import (
     close_db_connection,
     get_user,
     update_user,
-    create_conversation_context,  # Add this line
+    update_name,
     update_conversation_context,
     get_conversation_context
 ) 
@@ -43,10 +43,10 @@ PORT = int(os.getenv('PORT', 5050))
 
 def build_system_message(user_data):
     return  ("""
-        You are a MemoryAid agent assisting patients with early-stage Alzheimer's and memory loss. Your goal is to help them retrieve, save, modify, and delete information in the database while maintaining clarity, accuracy, and a caring approach.  
-        Any input that you receive can be assumed to be coming from the patient. But once you receive a response starting with [ADMIN], you should treat it as an instruction from the system.
+        You are a MemoryAid agent assisting patients with early-stage Alzheimer's and memory loss. Your goal is to help them retrieve and save information in the database while maintaining clarity, accuracy, and a caring approach.  
+        Any input that you receive can be assumed to be coming from the patient. But once you receive a response starting with [ADMIN], you should treat it as an instruction from the system and perform what it says.
         Rules for Handling Requests:  
-        Saving Information (Create Operation)  
+        Saving Information ( Operation)  
         Trigger: When the patient asks to save or store new information.  
         Response Format: You must respond with a JSON object in this exact format:  
         {"operation": "create", "data": {}}  
@@ -182,7 +182,26 @@ async def handle_media_stream(websocket: WebSocket):
         chat_audio_ready = False
         name = None     #name of the person to register
         bol = True
-        
+        crud_op_enabled = False
+
+        async def inject_data(data):
+            initial_conversation_item = {
+                "type": "conversation.item.create",
+                "item": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": data
+                        }
+                    ]
+                }
+            }
+            
+            await openai_ws.send(json.dumps(initial_conversation_item))
+            await openai_ws.send(json.dumps({"type": "response.create"}))
+
         async def receive_from_twilio():
             """Receive audio data from Twilio and send it to the OpenAI Realtime API."""
             nonlocal stream_sid, latest_media_timestamp,  bol, activate_registration, first_entry_time, chat_audio_ready, name
@@ -214,9 +233,9 @@ async def handle_media_stream(websocket: WebSocket):
                                 chat_history += f"Speaker {utterance.speaker}: {utterance.text}/n"
                                 print(f"Speaker {utterance.speaker}: {utterance.text}")
                             await update_conversation_context("679f1649fe70e4ec01ca2cf4",chat_history,db)
-
+                            print("chat added ")
                             ####################################
-
+                            await inject_data("[ADMIN] Tell the user that the conversation was added")
                             chat_audio_ready = False
 
                         ################################################################
@@ -243,8 +262,8 @@ async def handle_media_stream(websocket: WebSocket):
                             audio_file.write(audio_data)
                             audio_file.close()
                         ################################################################
-
-                        await openai_ws.send(json.dumps(audio_append))
+                        if activate_registration == False:
+                            await openai_ws.send(json.dumps(audio_append))
                     elif data['event'] == 'start':
                         stream_sid = data['start']['streamSid']
                         print(f"Incoming stream has started {stream_sid}")
@@ -259,28 +278,9 @@ async def handle_media_stream(websocket: WebSocket):
                 if openai_ws.open:
                     await openai_ws.close()
 
-        async def inject_data(data):
-            initial_conversation_item = {
-                "type": "conversation.item.create",
-                "item": {
-                    "type": "message",
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "input_text",
-                            "context": data,
-                            "text": "Answer the user question with the following context?"
-                        }
-                    ]
-                }
-            }
-            
-            await openai_ws.send(json.dumps(initial_conversation_item))
-            await openai_ws.send(json.dumps({"type": "response.create"}))
-
         async def send_to_twilio():
             """Receive events from the OpenAI Realtime API, send audio back to Twilio."""
-            nonlocal stream_sid, last_assistant_item, response_start_timestamp_twilio, name, activate_registration
+            nonlocal stream_sid, last_assistant_item, response_start_timestamp_twilio, name, activate_registration, crud_op_enabled
             try:
                 async for openai_message in openai_ws:
                     response = json.loads(openai_message)
@@ -304,6 +304,7 @@ async def handle_media_stream(websocket: WebSocket):
                                             # Process the transcript data
                                             if isinstance(transcript_data, dict):
                                                 if "operation" in transcript_data and "data" in transcript_data:
+                                                    crud_op_enabled = True
                                                     if transcript_data["operation"] == "create":
                                                         if "name" in transcript_data["data"]:
                                                             user = await create_user(transcript_data["data"], db)
@@ -314,6 +315,7 @@ async def handle_media_stream(websocket: WebSocket):
                                                     if transcript_data["operation"] == "save":
                                                         print("initialise converstion")
                                                         name = transcript_data["data"]["name"]
+                                                        update_name("679f0e88fe70e4ec01ca2cf2", name, db)
                                                         activate_registration = True
                                                         #await create_conversation_context(transcript_data["data"], db)
                                                     if transcript_data["operation"] == "search":
@@ -348,7 +350,9 @@ async def handle_media_stream(websocket: WebSocket):
                                 "payload": audio_payload
                             }
                         }
-                        await websocket.send_json(audio_delta)
+                        if activate_registration == False:  #and crud_op_enabled == False:
+                            await websocket.send_json(audio_delta)
+                        crud_op_enabled = False
 
                         if response_start_timestamp_twilio is None:
                             response_start_timestamp_twilio = latest_media_timestamp
