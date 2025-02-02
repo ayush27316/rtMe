@@ -23,7 +23,7 @@ async def create_user(user_data: dict, db):
     except Exception as e:
         print(f"An error occurred: {e}")
 
-async def create_conversation_context(conversation_data: dict, db):
+async def create_conversation_context(name: str, conversation_data: dict, db):
     """
     Insert a new document into the 'conversation' collection.
     """
@@ -87,6 +87,7 @@ from typing import Optional, List
 import numpy as np
 from bson.binary import Binary
 import pickle
+from datetime import datetime
 
 # Add these CRUD functions for face operations
 
