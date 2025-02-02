@@ -1,9 +1,8 @@
 import asyncio
 from bson.objectid import ObjectId
 from mongoDB_connection import (
-    create_user, create_conversation_context, update_user_context,
-    get_user_context, get_conversation_context,
-    close_db_connection
+    create_user, create_conversation_context, get_conversation_context,
+    close_db_connection, get_user
 )
 
 def print_separator():
@@ -20,18 +19,8 @@ async def test_crud_operations():
     print_separator()
 
     # Retrieve user context
-    user = await get_user_context(user_id)
+    user = await get_user(user_id)
     print(f"User Retrieved: {user}")
-    print_separator()
-
-    # Update user context
-    updated_count = await update_user_context(user_id, {"mood": "happy"})
-    print(f"User Context Updated: {updated_count} document(s) modified")
-    print_separator()
-
-    # Retrieve updated user context
-    updated_user = await get_user_context(user_id)
-    print(f"Updated User: {updated_user}")
     print_separator()
 
     # Create a new conversation

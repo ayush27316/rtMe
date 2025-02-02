@@ -62,6 +62,8 @@ SYSTEM_MESSAGE = (
     User Request: "What is my doctor's appointment?"  
     Correct Response: {"operation": "search","name": "name of the person about whom the user is querying" "data": {"appointment": "Doctor on Monday at 3 PM"}}  
 
+
+
     3. Modifying Information (Update Operation)  
     Trigger: When the user asks to change, update, or modify existing information.  
     Response Format: You must respond with a JSON object in this exact format:  
@@ -71,6 +73,17 @@ SYSTEM_MESSAGE = (
     Example:  
     User Request: "Change my doctor's appointment to Tuesday at 4 PM."  
     Correct Response: {'operation': "update", 'data': {'appointment': {'old': 'Doctor on Monday at 3 PM', 'new': 'Doctor on Tuesday at 4 PM'}}}  
+
+    4. Saving chat history 
+    Trigger: When the user asks to save chat history.
+    Response Format: You must respond with a JSON object in this exact format:
+    {'operation': "save", 'data': {}}
+    How to Fill It:
+    - Place the chat history inside the data field.
+    - Place the name of the person whose chat history is being saved.
+    Example:
+    User Request: "Save this chat history with {user}."
+    Correct Response: {"operation": "save", "data": {"chat_history": "chat history with {user}, name: {user}"}}
 
     Additional Rules to Follow:  
     Be direct and precise and provide only the requested information without adding extra text.  
@@ -211,8 +224,9 @@ async def handle_media_stream(websocket: WebSocket):
                                                         if "name" in transcript_data["data"]:
                                                             user = await create_user(transcript_data["data"], db)
                                                             print(f"Successfully processed user information: {transcript_data['operation']}")
-                                                        else:
-                                                            await create_conversation_context(transcript_data["data"], db)
+                                                    if transcript_data["operation"] == "save":
+                                                        print(f"Saving chat history: {transcript_data['data']}")
+                                                        #await create_conversation_context(transcript_data["data"], db)
                                                     if transcript_data["operation"] == "search":
                                                         print(f"Searching for user information: {transcript_data['data']}")
                                                         user = await get_user(transcript_data["data"]["name"], db)

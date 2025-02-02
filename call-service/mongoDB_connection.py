@@ -46,13 +46,13 @@ async def update_user(user_id: str, data: dict, db):
     except Exception as e:
         print(f"An error occurred: {e}")
 
-async def get_user(name: str, db):
+async def get_user(userid: str, db):
     """
     Retrieve the context of a user.
     """
     try:
-        result = await db["user"].find_one({"name": name})
-        return result
+        result = await db["user"].find_one({"_id": ObjectId(userid)})
+        return str(result)
     except Exception as e:
         print(f"An error occurred: {e}")
 
