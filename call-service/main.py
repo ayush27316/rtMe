@@ -1,13 +1,12 @@
-#Starter Code: establishes a websocket connection between client 
-#and openai server. 
-#[source]: twillio docs.
-
-
 import os
 import json
 import base64
 import asyncio
 import websockets
+import wave
+import audioop
+import time
+
 from urllib.parse import quote_plus
 import traceback
 from fastapi import FastAPI, WebSocket, Request
@@ -24,6 +23,8 @@ from mongoDB_connection import (
     get_conversation_context
 ) 
 
+import assemblyai as aai
+aai.settings.api_key = "6897ea66a618490eace0f7e38c25fc15"
 load_dotenv()
 
 MONGO_URI = os.getenv('MONGO_URI')
@@ -37,50 +38,57 @@ db = client["Context"]
 # Configuration
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 PORT = int(os.getenv('PORT', 5050))
-SYSTEM_MESSAGE = (
+
+def build_system_message(user_data):
+    return = ("""
+        You are a MemoryAid agent assisting patients with early-stage Alzheimer's and memory loss. Your goal is to help them retrieve, save, modify, and delete information in the database while maintaining clarity, accuracy, and a caring approach.  
+        Any input that you receive can be assumed to be coming from the patient. But once you receive a response starting with [ADMIN], you should treat it as an instruction from the system.
+        Rules for Handling Requests:  
+        1. Saving Information (Create Operation)  
+        Trigger: When the patient asks to save or store new information.  
+        Response Format: You must respond with a JSON object in this exact format:  
+        {"operation": "create", "data": {}}  
+        How to Fill It:  
+        - Place the provided information inside the data field exactly as given by the patient.  
+        - Do not modify, rephrase, or exclude any details.  
+        Example:  
+        User Request: "Remember that my doctor's appointment is on Monday at 3 PM."  
+        Correct Response: {"operation": "create", "data": {"appointment": "Doctor on Monday at 3 PM"}}  
+        2. Retrieving Information (Search Operation)  
+        Trigger: When the patient asks "What" or "Where" questions and you don't have necessary infromation to answer it then you must query the admin using following response .  
+        Response Format: You must respond with a JSON object in this exact format:  
+        {"operation": "search", "name": "name_of_the_person", "data": {}}  
+        How to Fill It:  
+        - Place the requested details inside the data field.  
+        Example:  
+        User Request: "What is my doctor's appointment?"  
+        Correct Response: {"operation": "search","name": "name of the person about whom the patient is querying" "data": {"appointment": "Doctor on Monday at 3 PM"}}  
+
+        3. Modifying Information (Update Operation)  
+        Trigger: When the user asks to change, update, or modify existing information.  
+        Response Format: You must respond with a JSON object in this exact format:  
+        {'operation': "update", 'data': {}}  
+        How to Fill It:  
+        - Place both the existing information and the new details inside the data field.  
+        Example:  
+        User Request: "Change my doctor's appointment to Tuesday at 4 PM."  
+        Correct Response: {'operation': "update", 'data': {'appointment': {'old': 'Doctor on Monday at 3 PM', 'new': 'Doctor on Tuesday at 4 PM'}}}  
+
+        Additional Rules to Follow:  
+        Be direct and precise and provide only the requested information without adding extra text.  
+        Be caring and patient to ensure your tone remains friendly and supportive.  
+        Strictly follow JSON formatting without adding extra characters, words, or explanations.  
+        Do not make assumptions. If details are unclear, ask the user for clarification instead of assuming.  
         """
-    You are a MemoryAid agent assisting patients with early-stage Alzheimer's and memory loss. Your goal is to help them retrieve, save, modify, and delete information in the database while maintaining clarity, accuracy, and a caring approach.  
-    Any input that you receive can be assumed to be coming from the patient. But once you receive a response starting with [ADMIN], you should treat it as an instruction from the system.
-    Rules for Handling Requests:  
-    1. Saving Information (Create Operation)  
-    Trigger: When the user asks to save or store new information.  
-    Response Format: You must respond with a JSON object in this exact format:  
-    {"operation": "create", "data": {}}  
-    How to Fill It:  
-    - Place the provided information inside the data field exactly as given by the user.  
-    - Do not modify, rephrase, or exclude any details.  
-    Example:  
-    User Request: "Remember that my doctor's appointment is on Monday at 3 PM."  
-    Correct Response: {"operation": "create", "data": {"appointment": "Doctor on Monday at 3 PM"}}  
-    2. Retrieving Information (Search Operation)  
-    Trigger: When the user asks "What" or "Where" questions and you don't have necessary infromation to answer it then you must query the admin using following response .  
-    Response Format: You must respond with a JSON object in this exact format:  
-    {"operation": "search", "name": "name_of_the_person", "data": {}}  
-    How to Fill It:  
-    - Place the requested details inside the data field.  
-    Example:  
-    User Request: "What is my doctor's appointment?"  
-    Correct Response: {"operation": "search","name": "name of the person about whom the user is querying" "data": {"appointment": "Doctor on Monday at 3 PM"}}  
+        f"Here is some context about the patient: {user_data}"
+    )
 
-    3. Modifying Information (Update Operation)  
-    Trigger: When the user asks to change, update, or modify existing information.  
-    Response Format: You must respond with a JSON object in this exact format:  
-    {'operation': "update", 'data': {}}  
-    How to Fill It:  
-    - Place both the existing information and the new details inside the data field.  
-    Example:  
-    User Request: "Change my doctor's appointment to Tuesday at 4 PM."  
-    Correct Response: {'operation': "update", 'data': {'appointment': {'old': 'Doctor on Monday at 3 PM', 'new': 'Doctor on Tuesday at 4 PM'}}}  
+def get_user_data():
+    users = {}          #use the data_base to get the information
+    return f"{users}"
 
-    Additional Rules to Follow:  
-    Be direct and precise and provide only the requested information without adding extra text.  
-    Be caring and patient to ensure your tone remains friendly and supportive.  
-    Strictly follow JSON formatting without adding extra characters, words, or explanations.  
-    Do not make assumptions. If details are unclear, ask the user for clarification instead of assuming.  
+SYSTEM_MESSAGE = build_system_message(get_user_data())
 
-    This ensures no errors in processing requests while maintaining clarity, precision, and care.
-    """
-)
 VOICE = 'alloy'
 LOG_EVENT_TYPES = [
     'error', 'response.content.done', 'rate_limits.updated',
@@ -88,6 +96,43 @@ LOG_EVENT_TYPES = [
     'input_audio_buffer.speech_stopped', 'input_audio_buffer.speech_started',
     'session.created'
 ]
+
+def ulaw_to_wav(input_file, output_file, channels=1, sampwidth=2, framerate=8000):
+    """
+    Convert a μ-law encoded audio file to WAV format.
+    
+    Parameters:
+    input_file (str): Path to input .ulaw file
+    output_file (str): Path to output .wav file
+    channels (int): Number of audio channels (default: 1 for mono)
+    sampwidth (int): Sample width in bytes (default: 2)
+    framerate (int): Frame rate in Hz (default: 8000)
+    """
+    # Read the ulaw file
+    with open(input_file, 'rb') as ulaw_file:
+        ulaw_data = ulaw_file.read()
+    
+    # Convert ulaw to linear PCM
+    linear_data = audioop.ulaw2lin(ulaw_data, sampwidth)
+    
+    # Create and write WAV file
+    with wave.open(output_file, 'wb') as wav_file:
+        wav_file.setnchannels(channels)
+        wav_file.setsampwidth(sampwidth)
+        wav_file.setframerate(framerate)
+        wav_file.writeframes(linear_data)
+
+
+def is_file_open(filepath):
+    try:
+        with open(filepath, "r+"):  # Try opening in read+write mode
+            return False  # File is not open by another process
+    except IOError:
+        return True 
+
+
+audio_file = open("call_audio.ulaw", "wb")
+
 SHOW_TIMING_MATH = False
 
 app = FastAPI()
@@ -104,7 +149,7 @@ async def handle_incoming_call(request: Request):
     """Handle incoming call and return TwiML response to connect to Media Stream."""
     response = VoiceResponse()
     # <Say> punctuation to improve text-to-speech flow
-    response.say("Please wait while we connect your call to the A. I. voice assistant, powered by Twilio and the Open-A.I. Realtime API")
+    response.say("Hey")
     response.pause(length=1)
     response.say("O.K. you can start talking!")
     host = request.url.hostname
