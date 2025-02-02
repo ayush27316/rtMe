@@ -316,7 +316,7 @@ async def handle_media_stream(websocket: WebSocket):
                                                     if transcript_data["operation"] == "save":
                                                         print("initialise converstion")
                                                         name = transcript_data["data"]["name"]
-                                                        update_name("679f0e88fe70e4ec01ca2cf2", name, db)
+                                                        await update_name("679f49e667ed1aea77792288", name, db)
                                                         activate_registration = True
                                                         #await create_conversation_context(transcript_data["data"], db)
                                                     if transcript_data["operation"] == "search":
@@ -351,7 +351,8 @@ async def handle_media_stream(websocket: WebSocket):
                                 "payload": audio_payload
                             }
                         }
-                        if activate_registration == False:  #and crud_op_enabled == False:
+                        ##maybe we can filter based on the text. 
+                        if activate_registration == False and crud_op_enabled == False:
                             await websocket.send_json(audio_delta)
                         crud_op_enabled = False
 
