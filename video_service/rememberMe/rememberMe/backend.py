@@ -71,32 +71,6 @@ async def shutdown_db_client():
 # Your existing face detection setup
 face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
 
-STABLE_FACES_DIR = "stable_faces"
-if not os.path.exists(STABLE_FACES_DIR):
-    os.makedirs(STABLE_FACES_DIR)
-
-
-
-def save_cropped_face(image, face_coords, timestamp=None):
-    """Crop and save face region"""
-    x, y, w, h = face_coords
-    # Add some padding around the face
-    padding = 30
-    y1 = max(y - padding, 0)
-    y2 = min(y + h + padding, image.shape[0])
-    x1 = max(x - padding, 0)
-    x2 = min(x + w + padding, image.shape[1])
-    
-    face_img = image[y1:y2, x1:x2]
-    
-    if timestamp is None:
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"face_{timestamp}.jpg"
-    filepath = os.path.join(STABLE_FACES_DIR, filename)
-    cv2.imwrite(filepath, face_img)
-    return filepath #return the path of the saved image (can be removed)
-
-
 
 
 @app.websocket("/ws")
@@ -157,7 +131,6 @@ async def websocket_endpoint(websocket: WebSocket):
     finally:
         await websocket.close()
         
-
 @app.websocket("/ws-stable")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
@@ -189,6 +162,7 @@ async def websocket_endpoint(websocket: WebSocket):
 
             stable_face_detected = True
             saved_file = None
+            recognized_name = 'Face'  # Default value
 
             if len(faces) > 0:
                 largest_face = max(faces, key=lambda rect: rect[2] * rect[3])  # Find the largest face
@@ -201,34 +175,30 @@ async def websocket_endpoint(websocket: WebSocket):
                             x, y, w, h = face
                             key = (x//20, y//20, w//20, h//20)  # Group faces by position and size
                             face_counts[key] = face_counts.get(key, 0) + 1
-                    
 
-                    # If a face appears consistently in the same area (e.g., 24 out of 30 frames)
+                    # If a face appears consistently
                     for key, count in face_counts.items():
                         if count >= 1:
                             stable_face_detected = True
                             x, y, w, h = largest_face
-                            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                            saved_file = save_cropped_face(img, largest_face, timestamp)
-                            global latest_stable_face_image_base64
-
-                            # You can store or return the stable face image for further processing
-                            latest_stable_face_image_base64 = base64.b64encode(buffer).decode('utf-8')
-                            break
-                #global latest_stable_face_image_base64
-
-                # You can store or return the stable face image for further processing
                 
+                            
+                            # Call recognize_face_endpoint
+                            recognition_result = await recognize_face_endpoint()
+                            if "recognized_face" in recognition_result:
+                                recognized_name = recognition_result["recognized_face"]
+                            break
 
                 # Draw a rectangle around the largest detected face
                 x, y, w, h = largest_face
                 cv2.rectangle(processed_img, (x, y), (x+w, y+h), (0, 255, 0), 2)
-                cv2.putText(processed_img, 'Face', (x, y-10), 
+                cv2.putText(processed_img, recognized_name, (x, y-10), 
                             cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
 
             # Encode processed image to base64
             _, buffer = cv2.imencode('.jpg', processed_img)
             processed_image_base64 = base64.b64encode(buffer).decode('utf-8')
+            global latest_stable_face_image_base64
             latest_stable_face_image_base64 = processed_image_base64
 
             # Prepare the response JSON
@@ -239,17 +209,12 @@ async def websocket_endpoint(websocket: WebSocket):
                 "saved_file": saved_file
             }
 
-            # Print the final JSON being returned
-            print("Returning the following JSON:")
-            #print(response_json)
-            #print(latest_stable_face_image_base64)
-
-            # Send the response to the client
             await websocket.send_json(response_json)
     except Exception as e:
             print(f"Error: {e}")
     finally:
         await websocket.close()
+
 
 def crop_face_from_rect_overlay(image):
     # Ensure the input image is valid
@@ -302,7 +267,6 @@ import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
 # Assuming facenet_model is initialized globally
 facenet_model = InceptionResnetV1(pretrained='vggface2').eval()
-mtcnn = MTCNN()
 from torchvision import transforms
 import torch
 from PIL import Image
