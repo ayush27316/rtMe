@@ -8,33 +8,37 @@ import json
 import base64
 import asyncio
 import websockets
+from urllib.parse import quote_plus
+import traceback
 from fastapi import FastAPI, WebSocket, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.websockets import WebSocketDisconnect
 from twilio.twiml.voice_response import VoiceResponse, Connect, Say, Stream
 from dotenv import load_dotenv
-
+from motor.motor_asyncio import AsyncIOMotorClient
 from mongoDB_connection import (
-    create_user,
-    create_conversation_context,
-    update_user_context,
-    get_user_context,
-    get_conversation_context,
+    create_user, create_conversation_context, update_user_context,
+    get_user_context, get_conversation_context,
     close_db_connection
-)
-
-
+) 
 
 load_dotenv()
+
+MONGO_URI = os.getenv('MONGO_URI')
+encoded_password = quote_plus(os.getenv("MONGO_PASSWORD"))
+# Replace the placeholder with the encoded password.
+client = AsyncIOMotorClient(MONGO_URI.replace("<db_password>", encoded_password))
+
+# Use your database name (adjust as needed)
+db = client["Context"]
 
 # Configuration
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 PORT = int(os.getenv('PORT', 5050))
 SYSTEM_MESSAGE = (
-    "You are a helpful and bubbly AI assistant who loves to chat about "
-    "anything the user is interested in and is prepared to offer them facts. "
-    "You have a penchant for dad jokes, owl jokes, and rickrolling – subtly. "
-    "Always stay positive, but work in a joke when appropriate."
+    "You are a helpful and bubbly AI assistant who loves to chat about anything the user is interested in and is prepared to offer them facts."
+    "You have a penchant for dad jokes, owl jokes, and rickrolling – subtly. Always stay positive, but work in a joke when appropriate."
+    "When the user ask somthing you don't know then, you will respond with a JSON object with the field and data key pair and nothing else in the json format.!!!important do not add anything else!!!! The JSON format should be the following {'operation': <[create,update,search]>, 'data': {}}. !!!!This is important!!!"
 )
 VOICE = 'alloy'
 LOG_EVENT_TYPES = [
@@ -117,15 +121,43 @@ async def handle_media_stream(websocket: WebSocket):
                 if openai_ws.open:
                     await openai_ws.close()
 
-
         async def send_to_twilio():
             """Receive events from the OpenAI Realtime API, send audio back to Twilio."""
             nonlocal stream_sid, last_assistant_item, response_start_timestamp_twilio
             try:
                 async for openai_message in openai_ws:
                     response = json.loads(openai_message)
-                    if response['type'] in LOG_EVENT_TYPES:
-                        print(f"Received event: {response['type']}", response)
+
+                    if response.get('type') == 'response.done':
+                        print("Response done.")
+                        if response.get("response"):
+                            output = response["response"].get("output", [])
+                            if output:  # Check if output list is not empty
+                                content = output[0].get("content", [])
+                                if content:  # Check if content list is not empty
+                                    transcript = content[0].get("transcript", "")
+                                    try:
+                                        # Check if transcript is a string containing JSON
+                                        if isinstance(transcript, str):
+                                            transcript_data = json.loads(transcript)
+                                        else:
+                                            transcript_data = transcript
+                                        
+                                        # Access the data field directly
+                                        if isinstance(transcript_data, dict) and "data" in transcript_data:
+                                            await create_user(transcript_data["data"], db)
+                                        else:
+                                            print(f"Invalid transcript format: {transcript_data}")
+                                    except json.JSONDecodeError as e:
+                                        print(f"JSON parsing error: {e}")
+                                        print(f"Transcript content: {transcript}")
+                                    except Exception as e:
+                                        print(f"Error processing transcript: {str(e)}")
+                                        print(f"Transcript content: {transcript}")
+                                else:
+                                    print("No content found in the output.")
+                            else:
+                                print("No output found in the response.")
 
                     if response.get('type') == 'response.audio.delta' and 'delta' in response:
                         audio_payload = base64.b64encode(base64.b64decode(response['delta'])).decode('utf-8')
@@ -143,20 +175,18 @@ async def handle_media_stream(websocket: WebSocket):
                             if SHOW_TIMING_MATH:
                                 print(f"Setting start timestamp for new response: {response_start_timestamp_twilio}ms")
 
-                        # Update last_assistant_item safely
                         if response.get('item_id'):
                             last_assistant_item = response['item_id']
 
-                        await send_mark(websocket, stream_sid)
-
-                    # Trigger an interruption. Your use case might work better using `input_audio_buffer.speech_stopped`, or combining the two.
                     if response.get('type') == 'input_audio_buffer.speech_started':
-                        print("Speech started detected.")
                         if last_assistant_item:
                             print(f"Interrupting response with id: {last_assistant_item}")
                             await handle_speech_started_event()
+
             except Exception as e:
                 print(f"Error in send_to_twilio: {e}")
+                traceback.print_exc()
+
 
         async def handle_speech_started_event():
             """Handle interruption when the caller's speech starts."""
@@ -239,11 +269,7 @@ async def initialize_session(openai_ws):
     # Uncomment the next line to have the AI speak first
     # await send_initial_conversation_item(openai_ws)
 
-
-
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=PORT)
-    close_db_connection()
-    print("Closed connection to server and MongoDB Atlas database.")
-
+    close_db_connection(client)
