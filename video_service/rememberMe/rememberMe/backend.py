@@ -25,13 +25,24 @@ STABLE_FACES_DIR = "stable_faces"
 if not os.path.exists(STABLE_FACES_DIR):
     os.makedirs(STABLE_FACES_DIR)
 
-def save_stable_face(image):
-    """Save stable face with timestamp"""
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"stable_face_{timestamp}.jpg"
+def save_cropped_face(image, face_coords, timestamp=None):
+    """Crop and save face region"""
+    x, y, w, h = face_coords
+    # Add some padding around the face
+    padding = 30
+    y1 = max(y - padding, 0)
+    y2 = min(y + h + padding, image.shape[0])
+    x1 = max(x - padding, 0)
+    x2 = min(x + w + padding, image.shape[1])
+    
+    face_img = image[y1:y2, x1:x2]
+    
+    if timestamp is None:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"face_{timestamp}.jpg"
     filepath = os.path.join(STABLE_FACES_DIR, filename)
-    cv2.imwrite(filepath, image)
-    return filepath
+    cv2.imwrite(filepath, face_img)
+    return filepath #return the path of the saved image (can be removed)
 
 # Original websocket endpoint remains unchanged...
 
@@ -104,9 +115,10 @@ async def stable_face_endpoint(websocket: WebSocket):
                                 cv2.putText(processed_img, 'Stable Face', (x, y-10), 
                                           cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
                                 
-                                # Save stable face
-                                saved_file = save_stable_face(processed_img)
-                                print(f"Stable face saved: {saved_file}")
+                                # Save cropped face
+                                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                                saved_file = save_cropped_face(img, largest_face, timestamp)
+                                print(f"Cropped face saved: {saved_file}")
                                 
                                 # Clear buffer after saving
                                 face_buffer.clear()
