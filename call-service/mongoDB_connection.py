@@ -22,32 +22,35 @@ async def create_user(user_data: dict, db):
     except Exception as e:
         print(f"An error occurred: {e}")
 
-async def create_conversation_context(conversation_data: dict, db):
+async def create_conversation_context(conversation_data: str, name: str, db):
     """
     Insert a new document into the 'conversation' collection.
     """
     try:
-        result = await db["conversation_context"].insert_one(conversation_data)
+        result = await db["conversation_context"].insert_one({
+            "name": name,
+            "context": conversation_data
+        })
         return str(result.inserted_id)
     except Exception as e:
         print(f"An error occurred: {e}")
 
-async def update_user_context(user_id: str, context: dict, db):
+async def update_user(user_id: str, data: dict, db):
     """
     Update the context of a user.
     """
     try:
-        result = await db["user"].update_one({"_id": ObjectId(user_id)}, {"$set": {"context": context}})
-        return result.modified_count
+        result = await db["user"].update_one({"_id": ObjectId(user_id)}, {"$set": data})
+        return result.modified_counts
     except Exception as e:
         print(f"An error occurred: {e}")
 
-async def get_user_context(user_id: str, db):
+async def get_user(name: str, db):
     """
     Retrieve the context of a user.
     """
     try:
-        result = await db["user"].find_one({"_id": ObjectId(user_id)})
+        result = await db["user"].find_one({"name": name})
         return result
     except Exception as e:
         print(f"An error occurred: {e}")

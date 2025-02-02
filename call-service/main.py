@@ -17,9 +17,11 @@ from twilio.twiml.voice_response import VoiceResponse, Connect, Say, Stream
 from dotenv import load_dotenv
 from motor.motor_asyncio import AsyncIOMotorClient
 from mongoDB_connection import (
-    create_user, create_conversation_context, update_user_context,
-    get_user_context, get_conversation_context,
-    close_db_connection
+    create_user,
+    close_db_connection,
+    get_user,
+    create_conversation_context,  # Add this line
+    get_conversation_context
 ) 
 
 load_dotenv()
@@ -38,7 +40,9 @@ PORT = int(os.getenv('PORT', 5050))
 SYSTEM_MESSAGE = (
     "You are a helpful and bubbly AI assistant who loves to chat about anything the user is interested in and is prepared to offer them facts."
     "You have a penchant for dad jokes, owl jokes, and rickrolling – subtly. Always stay positive, but work in a joke when appropriate."
-    "When the user ask somthing you don't know then, you will respond with a JSON object with the field and data key pair and nothing else in the json format.!!!important do not add anything else!!!! The JSON format should be the following {'operation': <[create,update,search]>, 'data': {}}. !!!!This is important!!!"
+    "When the user asks you to save his personal information then do so by responding with a JSON object with the field<string> and \"data<string>\" key pair and nothing else in the json format.!!!important do not add anything else!!!! The JSON format should be the following {'operation': create, 'data': {}}. !!!!This is important!!!"
+    "When the user asks what and why questions about his personal information then respond with a JSON object with the name info and what to find key data pair and nothing else in the json format.!!!important do not add anything else!!!! The JSON format should be the following {'operation': search, 'data': {}}. !!!!This is important!!!"
+
 )
 VOICE = 'alloy'
 LOG_EVENT_TYPES = [
@@ -121,6 +125,25 @@ async def handle_media_stream(websocket: WebSocket):
                 if openai_ws.open:
                     await openai_ws.close()
 
+        async def inject_data(data):
+            initial_conversation_item = {
+                "type": "conversation.item.create",
+                "item": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "context": data,
+                            "text": "Answer the user question with the following context?"
+                        }
+                    ]
+                }
+            }
+            
+            await openai_ws.send(json.dumps(initial_conversation_item))
+            await openai_ws.send(json.dumps({"type": "response.create"}))
+
         async def send_to_twilio():
             """Receive events from the OpenAI Realtime API, send audio back to Twilio."""
             nonlocal stream_sid, last_assistant_item, response_start_timestamp_twilio
@@ -133,27 +156,44 @@ async def handle_media_stream(websocket: WebSocket):
                         if response.get("response"):
                             output = response["response"].get("output", [])
                             if output:  # Check if output list is not empty
-                                content = output[0].get("content", [])
+                                content = output[0].get("content", "")
                                 if content:  # Check if content list is not empty
+                                    # Extract JSON string from transcript between the curly brackets
                                     transcript = content[0].get("transcript", "")
-                                    try:
-                                        # Check if transcript is a string containing JSON
-                                        if isinstance(transcript, str):
-                                            transcript_data = json.loads(transcript)
-                                        else:
-                                            transcript_data = transcript
-                                        
-                                        # Access the data field directly
-                                        if isinstance(transcript_data, dict) and "data" in transcript_data:
-                                            await create_user(transcript_data["data"], db)
-                                        else:
-                                            print(f"Invalid transcript format: {transcript_data}")
-                                    except json.JSONDecodeError as e:
-                                        print(f"JSON parsing error: {e}")
-                                        print(f"Transcript content: {transcript}")
-                                    except Exception as e:
-                                        print(f"Error processing transcript: {str(e)}")
-                                        print(f"Transcript content: {transcript}")
+                                    print(f"Transcript: {transcript}")
+                                    start_index = transcript.find('{')
+                                    end_index = transcript.rfind('}') + 1
+                                    if start_index != -1 and end_index != -1:
+                                        json_string = transcript[start_index:end_index]
+                                        try:
+                                            transcript_data = json.loads(json_string)
+                                            # Process the transcript data
+                                            if isinstance(transcript_data, dict):
+                                                if "operation" in transcript_data and "data" in transcript_data:
+                                                    if transcript_data["operation"] == "create":
+                                                        if "name" in transcript_data["data"]:
+                                                            await create_user(transcript_data["data"], db)
+                                                            print(f"Successfully processed user information: {transcript_data['operation']}")
+                                                        else:
+                                                            await create_conversation_context(transcript_data["data"], db)
+                                                    if transcript_data["operation"] == "search":
+                                                        print(f"Searching for user information: {transcript_data['data']}")
+                                                        user = await get_user(transcript_data["data"]["name"], db)
+                                                        await inject_data({"user": user})
+                                                        print(f"Successfully processed database operation: {transcript_data['operation']}")
+                                                else:
+                                                    print(f"Missing required fields in transcript data: {transcript_data}")
+                                            else:
+                                                print(f"Transcript data is not a dictionary: {transcript_data}")
+                                                
+                                        except json.JSONDecodeError as e:
+                                            print(f"JSON parsing error: {e}")
+                                            print(f"Transcript content: {json_string}")
+                                        except Exception as e:
+                                            print(f"Error processing transcript: {str(e)}")
+                                            print(f"Transcript content: {json_string}")
+                                    else:
+                                        print("No JSON data found in the transcript.")
                                 else:
                                     print("No content found in the output.")
                             else:
