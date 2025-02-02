@@ -44,7 +44,7 @@ PORT = int(os.getenv('PORT', 5050))
 def build_system_message(user_data):
     return  ("""
         You are a MemoryAid agent assisting patients with early-stage Alzheimer's and memory loss. Your goal is to help them retrieve and save information in the database while maintaining clarity, accuracy, and a caring approach.  
-        Any input that you receive can be assumed to be coming from the patient. But once you receive a response starting with [ADMIN], you should treat it as an instruction from the system and perform what it says.
+        Any input that you receive can be assumed to be coming from the patient. But once you receive a response starting with [ADMIN], you should treat it as an instruction from the system and interpret it as a context of the patient.
         Rules for Handling Requests:  
         Saving Information ( Operation)  
         Trigger: When the patient asks to save or store new information.  
@@ -183,7 +183,7 @@ async def handle_media_stream(websocket: WebSocket):
         name = None     #name of the person to register
         bol = True
         crud_op_enabled = False
-
+        visual = True               #need to turn this on every 2-3 seconds
         async def inject_data(data):
             initial_conversation_item = {
                 "type": "conversation.item.create",
@@ -204,7 +204,7 @@ async def handle_media_stream(websocket: WebSocket):
 
         async def receive_from_twilio():
             """Receive audio data from Twilio and send it to the OpenAI Realtime API."""
-            nonlocal stream_sid, latest_media_timestamp,  bol, activate_registration, first_entry_time, chat_audio_ready, name
+            nonlocal stream_sid, latest_media_timestamp,  bol, activate_registration, first_entry_time, chat_audio_ready, name, visual
             try:
                 async for message in websocket.iter_text():
                     data = json.loads(message)
@@ -214,6 +214,7 @@ async def handle_media_stream(websocket: WebSocket):
                             "type": "input_audio_buffer.append",
                             "audio": data['media']['payload']
                         }
+
                         ####inject chat context if any#######
                         if chat_audio_ready:
                             ulaw_to_wav("call_audio.ulaw", "out.wav")
