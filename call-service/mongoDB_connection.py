@@ -56,7 +56,8 @@ async def update_name(doc_id: str, new_name: str, db):
     Update the 'name' field of a document.
     """
     try:
-        result = await db["users"].update_one(
+        print("started updating name")
+        result = await db["face_name"].update_one(
             {"_id": ObjectId(doc_id)},
             {"$set": {"name": new_name}}  # Sets 'name' to 'new_name'
         )
