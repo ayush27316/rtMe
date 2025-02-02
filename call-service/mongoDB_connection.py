@@ -12,6 +12,7 @@ load_dotenv()
 # CRUD Helper Functions
 # --------------------------
 
+
 async def create_user(user_data: dict, db):
     """
     Insert a new document into the 'user' collection.
@@ -21,6 +22,7 @@ async def create_user(user_data: dict, db):
         return str(result.inserted_id)  # Convert ObjectId to string
     except Exception as e:
         print(f"An error occurred: {e}")
+
 
 async def create_conversation_context(conversation_data: dict, db):
     """
@@ -77,3 +79,86 @@ def close_db_connection(client):
     Close the connection to the database.
     """
     client.close()
+
+
+from typing import Optional, List
+import numpy as np
+from bson.binary import Binary
+import pickle
+
+# Add these CRUD functions for face operations
+
+async def create_face_entry(name: str, face_encoding: np.ndarray, image_path: str, db):
+    """
+    Insert a new face encoding into the 'faces' collection.
+    """
+    try:
+        # Convert numpy array to Binary for MongoDB storage
+        encoding_binary = Binary(pickle.dumps(face_encoding))
+        
+        face_data = {
+            "name": name,
+            "face_encoding": encoding_binary,
+            "created_at": datetime.now()
+        }
+        
+        result = await db["faces"].insert_one(face_data)
+        return str(result.inserted_id)
+    except Exception as e:
+        print(f"Error creating face entry: {e}")
+        return None
+
+async def get_all_face_encodings(db) -> List[dict]:
+    """
+    Retrieve all face encodings from the database.
+    Returns list of dictionaries containing name and encoding.
+    """
+    try:
+        face_entries = await db["faces"].find().to_list(length=None)
+        
+        # Convert Binary back to numpy arrays
+        processed_entries = []
+        for entry in face_entries:
+            processed_entries.append({
+                "name": entry["name"],
+                "face_encoding": pickle.loads(entry["face_encoding"]),
+            })
+        
+        return processed_entries
+    except Exception as e:
+        print(f"Error retrieving face encodings: {e}")
+        return []
+
+
+
+async def delete_face(name: str, db):
+    """
+    Delete a face entry from the database.
+    """
+    try:
+        result = await db["faces"].delete_one({"name": name})
+        return result.deleted_count > 0
+    except Exception as e:
+        print(f"Error deleting face: {e}")
+        return False
+
+async def update_face_encoding(name: str, new_face_encoding: np.ndarray, new_image_path: str, db):
+    """
+    Update the face encoding for an existing name.
+    """
+    try:
+        encoding_binary = Binary(pickle.dumps(new_face_encoding))
+        
+        result = await db["faces"].update_one(
+            {"name": name},
+            {
+                "$set": {
+                    "face_encoding": encoding_binary,
+                    "updated_at": datetime.now()
+                }
+            }
+        )
+        return result.modified_count > 0
+    except Exception as e:
+        print(f"Error updating face encoding: {e}")
+        return False
