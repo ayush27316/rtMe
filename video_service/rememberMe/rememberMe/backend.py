@@ -5,6 +5,10 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from urllib.parse import quote_plus
 import os
 #os.environ['KMP_DUPLICATE_LIB_OK']='True'
+from ultralytics import YOLO
+
+# Initialize YOLO model
+model = YOLO('yolov8n.pt')  # or your preferred YOLO model
 
 
 #from facenet_pytorch import MTCNN, InceptionResnetV1
@@ -18,6 +22,9 @@ MONGO_URI = "mongodb+srv://MubeenMohammed:<db_password>@cluster0.eydtb.mongodb.n
 MONGO_PASSWORD = "Mohdaslan@123"
 # Global variable to store the last stable face image
 latest_stable_face_image_base64 = None
+object_names=[]
+person_names=[]
+
 
 # Encode password safely
 encoded_password = quote_plus(MONGO_PASSWORD)
@@ -34,8 +41,6 @@ MONGO_URI = MONGO_URI.replace("<db_password>", encoded_password)
 
 client = AsyncIOMotorClient(MONGO_URI)
 db = client["Context"]
-
-
 
 # main.py (your FastAPI application)
 from fastapi import FastAPI, WebSocket
@@ -59,14 +64,155 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+
+import aiohttp
+import asyncio
+from bson import ObjectId
+from datetime import datetime
+
+
+last_checked_name = None
+is_background_task_running = False
+
+
+async def check_face_count():
+    """Check if the face count is exactly 1 from the WebSocket endpoint."""
+    url = "https://158b-132-205-229-214.ngrok-free.app/ws-stable"
+    
+    async with aiohttp.ClientSession() as session:
+        try:
+            async with session.get(url) as response:
+                response_json = await response.json()
+                face_count = response_json.get("face_count", 0)
+                return face_count == 1
+        except Exception as e:
+            print(f"Error checking face count: {str(e)}")
+            return False
+        
+async def get_latest_name(db) -> str:
+    """Fetch the most recent name from face_name collection"""
+    try:
+        # Sort by _id in descending order and get the first document
+        result = await db["face_name"].find_one(
+            sort=[("_id", -1)]  # Sort by _id in descending order
+        )
+        
+        if result and 'name' in result:
+            return result['name']
+        return None
+    except Exception as e:
+        print(f"Error fetching latest name: {str(e)}")
+        return None
+async def count_name_occurrences(name: str, db) -> int:
+    """Count how many times a name appears in the faces collection"""
+    try:
+        count = await db["faces"].count_documents({"name": name})
+        return count
+    except Exception as e:
+        print(f"Error counting name occurrences: {str(e)}")
+        return 0
+    
+async def background_face_checker():
+    global last_checked_name, is_background_task_running
+
+    is_background_task_running = True
+
+    while is_background_task_running:
+        try:
+            # Fetch the latest name
+            current_name = await get_latest_name(db)
+            occurrence_count = await count_name_occurrences(current_name, db)
+            print(f"Name '{current_name}' occurs {occurrence_count} times in database")
+            
+            if occurrence_count < 5:
+                if latest_stable_face_image_base64:
+                    # Check if face_count == 1
+                    face_is_valid = await check_face_count()
+
+                    if face_is_valid:
+                        try:
+                            # Make HTTP POST request to create_user endpoint
+                            async with aiohttp.ClientSession() as session:
+                                url = f"https://158b-132-205-229-214.ngrok-free.app/create_user/{current_name}"
+                                async with session.post(url) as response:
+                                    result = await response.json()
+                                    if "success" in result:
+                                        print(f"Successfully registered new face for {current_name}")
+                                    else:
+                                        print(f"Failed to register face: {result.get('error', 'Unknown error')}")
+                        except Exception as e:
+                            print(f"Error calling create_user endpoint: {str(e)}")
+                    else:
+                        print("Face count is not 1, skipping registration")
+                else:
+                    print("No stable face image available")
+                
+                last_checked_name = current_name
+            
+            # Wait for 3 seconds before next check
+            await asyncio.sleep(3)
+        
+        except Exception as e:
+            print(f"Error in background face checker: {str(e)}")
+            await asyncio.sleep(3)
+
+
+
+
+async def background_item_adder():
+    """Background task to add the latest items from global arrays to database every 3 seconds"""
+    global is_background_task_running, object_names, person_names
+    
+    while is_background_task_running:
+        try:
+            # Only proceed if there are items to add
+            if object_names or person_names:
+                timestamp = datetime.now()
+                
+                # Get the latest data from arrays
+                latest_objects = object_names[-1] if len(object_names[-1])>0 else None  # Copy current objects
+                latest_person = person_names[-1] if person_names else None  # Get last person name
+                if not (latest_person == 'Face' and not len(latest_objects)==0):
+
+                
+                    # Prepare item data
+                    item_data = {
+                        "timestamp": timestamp,
+                        "person_name": latest_person,
+                        "detected_objects": latest_objects
+                    }
+                    
+                    # Add to database
+                    await db["items"].insert_one(item_data)
+                    
+                    print(f"Added to items collection: Person: {latest_person}, Objects: {latest_objects}")
+                    
+                    # Clear the arrays after adding to database
+                    object_names.clear()
+                    person_names.clear()
+                
+            # Wait for 3 seconds
+            await asyncio.sleep(2)
+            
+        except Exception as e:
+            print(f"Error in background item adder: {str(e)}")
+          
+            await asyncio.sleep(3)
+
+
 # Initialize database connection on startup
 @app.on_event("startup")
 async def startup_db_client():
-    app.mongodb = await get_database()
+    app.mongodb = client
+    asyncio.create_task(background_face_checker())
+    asyncio.create_task(background_item_adder())
 
 @app.on_event("shutdown")
 async def shutdown_db_client():
-    app.mongodb.client.close()
+    global is_background_task_running
+    is_background_task_running = False
+    client.close()
 
 # Your existing face detection setup
 face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
@@ -130,10 +276,12 @@ async def websocket_endpoint(websocket: WebSocket):
         print(f"Error: {e}")
     finally:
         await websocket.close()
-        
+    
 @app.websocket("/ws-stable")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
+    
+    face_buffer = []
 
     try:
         while True:
@@ -148,11 +296,42 @@ async def websocket_endpoint(websocket: WebSocket):
             if img is None:
                 continue
 
-            # Process image
+            # Create a single image for all detections
             processed_img = img.copy()
             gray = cv2.cvtColor(processed_img, cv2.COLOR_BGR2GRAY)
 
-            # Detect faces
+            # YOLO object detection
+            results = model(processed_img)
+            
+            # Process YOLO results
+            CONFIDENCE_THRESHOLD = 0.5
+
+            # Get class names directly from model
+            names = model.model.names
+            obj=[]
+
+            # Draw object detection results
+            for result in results:
+                boxes = result.boxes
+                for box in boxes:
+                    conf = float(box.conf[0])
+                    if conf >= CONFIDENCE_THRESHOLD:
+                        x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
+                        cls = int(box.cls[0])
+                    
+                        label = names[cls]
+                        obj.append(label)
+                        
+                        x1, y1, x2, y2 = map(int, [x1, y1, x2, y2])
+                        
+                        # Draw object detection (in blue)
+                        cv2.rectangle(processed_img, (x1, y1), (x2, y2), (255, 0, 0), 2)
+                        cv2.putText(processed_img, f'{label} {conf:.2f}', (x1, y1-10), 
+                                  cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
+
+            # Face detection
+            global object_names
+            object_names.append(label)
             faces = face_cascade.detectMultiScale(
                 gray,
                 scaleFactor=1.1,
@@ -160,60 +339,61 @@ async def websocket_endpoint(websocket: WebSocket):
                 minSize=(30, 30)
             )
 
-            stable_face_detected = True
-            saved_file = None
-            recognized_name = 'Face'  # Default value
+            recognized_name = 'Face'
 
             if len(faces) > 0:
-                largest_face = max(faces, key=lambda rect: rect[2] * rect[3])  # Find the largest face
+                largest_face = max(faces, key=lambda rect: rect[2] * rect[3])
                 face_buffer.append(largest_face)
 
-                if len(face_buffer) >= 30:  # Check stability after 30 frames
+                if len(face_buffer) > 30:
+                    face_buffer.pop(0)
+
+                if len(face_buffer) >= 30:
                     face_counts = {}
                     for face in face_buffer:
                         if face is not None:
                             x, y, w, h = face
-                            key = (x//20, y//20, w//20, h//20)  # Group faces by position and size
+                            key = (x//20, y//20, w//20, h//20)
                             face_counts[key] = face_counts.get(key, 0) + 1
 
-                    # If a face appears consistently
                     for key, count in face_counts.items():
                         if count >= 1:
-                            stable_face_detected = True
                             x, y, w, h = largest_face
-                
-                            
-                            # Call recognize_face_endpoint
                             recognition_result = await recognize_face_endpoint()
                             if "recognized_face" in recognition_result:
                                 recognized_name = recognition_result["recognized_face"]
                             break
 
-                # Draw a rectangle around the largest detected face
+                # Draw face detection (in green)
                 x, y, w, h = largest_face
                 cv2.rectangle(processed_img, (x, y), (x+w, y+h), (0, 255, 0), 2)
+                global person_names
+                person_names.append(recognized_name)
                 cv2.putText(processed_img, recognized_name, (x, y-10), 
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
 
-            # Encode processed image to base64
+            # Encode final processed image
             _, buffer = cv2.imencode('.jpg', processed_img)
             processed_image_base64 = base64.b64encode(buffer).decode('utf-8')
+            
             global latest_stable_face_image_base64
             latest_stable_face_image_base64 = processed_image_base64
 
-            # Prepare the response JSON
+            # Simplified response JSON
             response_json = {
                 "processed_image": processed_image_base64,
-                "face_count": 1 if len(faces) > 0 else 0,
-                "stable_face_detected": stable_face_detected,
-                "saved_file": saved_file
+                "face_count": len(faces)
             }
 
             await websocket.send_json(response_json)
     except Exception as e:
-            print(f"Error: {e}")
+        print(f"Error: {e}")
+        
     finally:
         await websocket.close()
+
+
+
 
 
 def crop_face_from_rect_overlay(image):
@@ -537,42 +717,3 @@ if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
 
-'''
-import face_recognition
-import numpy as np
-from PIL import Image
-
-def compare_faces(image1_path, image2_path):
-    """
-    Compare two face images using face_recognition library
-    Args:
-        image1_path: Path to first image
-        image2_path: Path to second image
-    Returns:
-        float: Distance between faces (lower means more similar)
-    """
-    # Load images
-    image1 = face_recognition.load_image_file(image1_path)
-    image2 = face_recognition.load_image_file(image2_path)
-    
-    # Get face encodings
-    face_encodings1 = face_recognition.face_encodings(image1)
-    face_encodings2 = face_recognition.face_encodings(image2)
-    
-    if not face_encodings1 or not face_encodings2:
-        raise ValueError("No faces found in one or both images")
-    
-    # Calculate distance between faces
-    distance = face_recognition.face_distance([face_encodings1[0]], face_encodings2[0])[0]
-    
-    # Convert distance to similarity score (0-1)
-    similarity = 1 - distance
-    
-    if similarity > 0.6:
-        return True
-    else:
-        return False
-
-
-
-'''
