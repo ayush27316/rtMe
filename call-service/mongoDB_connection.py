@@ -3,6 +3,7 @@ from urllib.parse import quote_plus
 import os
 from dotenv import load_dotenv
 from bson.objectid import ObjectId  # Import ObjectId
+import json  # Import json module
 
 load_dotenv()
 
@@ -36,25 +37,34 @@ async def create_conversation_context(name: str, conversation_data: dict, db):
     except Exception as e:
         print(f"An error occurred: {e}")
 
-async def update_user(user_id: str, data: dict, db):
+async def update_user(user_id: str, data: str, db):
     """
-    Update the context of a user.
+    Append a string to the 'additional_data' array in a user's document.
     """
     try:
-        result = await db["user"].update_one({"_id": ObjectId(user_id)}, {"$set": data})
-        return result.modified_counts
+        result = await db["users"].update_one(
+            {"_id": ObjectId(user_id)},
+            {"$push": {"additional_data": data}}  # Appends 'data' to 'additional_data' array
+        )
+        return result.modified_count  # Returns the number of modified documents
     except Exception as e:
         print(f"An error occurred: {e}")
+        return 0
 
-async def get_user(name: str, db):
+async def get_user(userid: str, db):
     """
     Retrieve the context of a user.
     """
     try:
-        result = await db["user"].find_one({"name": name})
-        return result
+        result = await db["users"].find_one({"_id": ObjectId(userid)})
+        if result:
+            # Convert MongoDB document (dict) to a JSON string
+            return json.dumps(result, default=str)  # Handle ObjectId and other types
+        else:
+            return "{}"  # Empty JSON object string if no user found
     except Exception as e:
         print(f"An error occurred: {e}")
+        return "{}"  # Return empty JSON object string on error
 
 async def get_conversation_context(conversation_id: str, db):
     """
@@ -62,19 +72,28 @@ async def get_conversation_context(conversation_id: str, db):
     """
     try:
         result = await db["conversation_context"].find_one({"_id": ObjectId(conversation_id)})
-        return result
+        if result:
+            # Convert MongoDB document (dict) to a JSON string
+            return json.dumps(result, default=str)  # Handle ObjectId and other types
+        else:
+            return "{}"  # Empty JSON object string if no conversation found
     except Exception as e:
         print(f"An error occurred: {e}")
+        return "{}"  # Return empty JSON object string on error
 
-async def update_conversation_context(conversation_id: str, context: dict, db):
+async def update_conversation_context(conversation_id: str, conversation_to_add: str, db):
     """
-    Update the context of a conversation.
+    Update the context of a conversation by appending to the 'prev_conversation' array.
     """
     try:
-        result = await db["conversation_context"].update_one({"_id": ObjectId(conversation_id)}, {"$set": {"context": context}})
-        return result.modified_count
+        result = await db["conversation_context"].update_one(
+            {"_id": ObjectId(conversation_id)},
+            {"$push": {"prev_conversation": conversation_to_add}}  # Append to array
+        )
+        return result.modified_count  # Returns number of modified documents (1 or 0)
     except Exception as e:
         print(f"An error occurred: {e}")
+        return 0
 
 def close_db_connection(client):
     """

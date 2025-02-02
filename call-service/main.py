@@ -19,7 +19,9 @@ from mongoDB_connection import (
     create_user,
     close_db_connection,
     get_user,
+    update_user,
     create_conversation_context,  # Add this line
+    update_conversation_context,
     get_conversation_context
 ) 
 
@@ -40,11 +42,11 @@ OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 PORT = int(os.getenv('PORT', 5050))
 
 def build_system_message(user_data):
-    return = ("""
+    return  ("""
         You are a MemoryAid agent assisting patients with early-stage Alzheimer's and memory loss. Your goal is to help them retrieve, save, modify, and delete information in the database while maintaining clarity, accuracy, and a caring approach.  
         Any input that you receive can be assumed to be coming from the patient. But once you receive a response starting with [ADMIN], you should treat it as an instruction from the system.
         Rules for Handling Requests:  
-        1. Saving Information (Create Operation)  
+        Saving Information (Create Operation)  
         Trigger: When the patient asks to save or store new information.  
         Response Format: You must respond with a JSON object in this exact format:  
         {"operation": "create", "data": {}}  
@@ -53,27 +55,20 @@ def build_system_message(user_data):
         - Do not modify, rephrase, or exclude any details.  
         Example:  
         User Request: "Remember that my doctor's appointment is on Monday at 3 PM."  
-        Correct Response: {"operation": "create", "data": {"appointment": "Doctor on Monday at 3 PM"}}  
-        2. Retrieving Information (Search Operation)  
-        Trigger: When the patient asks "What" or "Where" questions and you don't have necessary infromation to answer it then you must query the admin using following response .  
-        Response Format: You must respond with a JSON object in this exact format:  
-        {"operation": "search", "name": "name_of_the_person", "data": {}}  
-        How to Fill It:  
-        - Place the requested details inside the data field.  
-        Example:  
-        User Request: "What is my doctor's appointment?"  
-        Correct Response: {"operation": "search","name": "name of the person about whom the patient is querying" "data": {"appointment": "Doctor on Monday at 3 PM"}}  
+        Correct Response: {"operation": "create", "data": {"appointment": "Doctor on Monday at 3 PM"}} 
 
-        3. Modifying Information (Update Operation)  
-        Trigger: When the user asks to change, update, or modify existing information.  
-        Response Format: You must respond with a JSON object in this exact format:  
-        {'operation': "update", 'data': {}}  
-        How to Fill It:  
-        - Place both the existing information and the new details inside the data field.  
-        Example:  
-        User Request: "Change my doctor's appointment to Tuesday at 4 PM."  
-        Correct Response: {'operation': "update", 'data': {'appointment': {'old': 'Doctor on Monday at 3 PM', 'new': 'Doctor on Tuesday at 4 PM'}}}  
-
+        Add chat history 
+        Trigger: When the user asks to add to chat history.
+        Response Format: You must respond with a JSON object in this exact format:
+        {'operation': "save", 'data': {}}
+        How to Fill It:
+        - Place the chat history inside the data field.
+        - Place the name of the person whose chat history is being saved.
+        Example:
+        User Request: "I am about to have a conversation with {user} please add this chat history"
+        Correct Response: {"operation": "save", "data": {"chat_history": "chat history with {user}, name: {user}"}} 
+        
+        Always check previous history to answer the patient's question. 
         Additional Rules to Follow:  
         Be direct and precise and provide only the requested information without adding extra text.  
         Be caring and patient to ensure your tone remains friendly and supportive.  
@@ -83,11 +78,14 @@ def build_system_message(user_data):
         f"Here is some context about the patient: {user_data}"
     )
 
-def get_user_data():
-    users = {}          #use the data_base to get the information
-    return f"{users}"
 
-SYSTEM_MESSAGE = build_system_message(get_user_data())
+async def get_user_data():
+    user_data = await get_user('679f0e88fe70e4ec01ca2cf2',db)
+    conversation_data = await get_conversation_context("679f1649fe70e4ec01ca2cf4",db)
+    final_data = user_data + "/nThese are the previous chat history for the patient:/n"+ conversation_data
+          #use the data_base to get the information
+    return f"{final_data}"
+
 
 VOICE = 'alloy'
 LOG_EVENT_TYPES = [
@@ -179,10 +177,15 @@ async def handle_media_stream(websocket: WebSocket):
         last_assistant_item = None
         mark_queue = []
         response_start_timestamp_twilio = None
+        activate_registration = False
+        first_entry_time = None
+        chat_audio_ready = False
+        name = None     #name of the person to register
+        bol = True
         
         async def receive_from_twilio():
             """Receive audio data from Twilio and send it to the OpenAI Realtime API."""
-            nonlocal stream_sid, latest_media_timestamp
+            nonlocal stream_sid, latest_media_timestamp,  bol, activate_registration, first_entry_time, chat_audio_ready, name
             try:
                 async for message in websocket.iter_text():
                     data = json.loads(message)
@@ -192,6 +195,55 @@ async def handle_media_stream(websocket: WebSocket):
                             "type": "input_audio_buffer.append",
                             "audio": data['media']['payload']
                         }
+                        ####inject chat context if any#######
+                        if chat_audio_ready:
+                            ulaw_to_wav("call_audio.ulaw", "out.wav")
+                            #need to convert the file and call the database to store the context.
+                            config = aai.TranscriptionConfig(
+                                speaker_labels=True,
+                                speakers_expected=2
+                            )
+
+                            transcriber = aai.Transcriber()
+                            transcript = aai.Transcriber().transcribe("./out.wav", config)
+                            
+                            ###################################
+                            #save the labelled chat data to the database.
+                            chat_history = f"Speaker A is the patient and Speaker B is {name}/n"
+                            for utterance in transcript.utterances:
+                                chat_history += f"Speaker {utterance.speaker}: {utterance.text}/n"
+                                print(f"Speaker {utterance.speaker}: {utterance.text}")
+                            await update_conversation_context("679f1649fe70e4ec01ca2cf4",chat_history,db)
+
+                            ####################################
+
+                            chat_audio_ready = False
+
+                        ################################################################
+                        #save the media stream if a new person registration is active
+                        ##[TO DO]in the response i need to query the chatgpt response 'start registration: 'name of the user'
+                        ##populate the name var in sen_response tab after chatgpt says so. also send the name to the video-endpoint.
+                        if activate_registration == True:
+                            current_time = time.time()
+
+                            # Record the time of first entry
+                            if first_entry_time is None:
+                                first_entry_time = current_time
+                            
+                            # Check if 30 seconds have passed since first entry
+                            if current_time - first_entry_time >= 15:
+                                first_entry_time = None
+                                activate_registration = False
+                                chat_audio_ready = True
+
+                            #transcriber.stream(payload_mulaw)
+                            if is_file_open("call_audio.ulaw") == False:
+                                audio_file = open("call_audio.ulaw", "ab")
+                            audio_data = base64.b64decode(data['media']['payload'])
+                            audio_file.write(audio_data)
+                            audio_file.close()
+                        ################################################################
+
                         await openai_ws.send(json.dumps(audio_append))
                     elif data['event'] == 'start':
                         stream_sid = data['start']['streamSid']
@@ -228,7 +280,7 @@ async def handle_media_stream(websocket: WebSocket):
 
         async def send_to_twilio():
             """Receive events from the OpenAI Realtime API, send audio back to Twilio."""
-            nonlocal stream_sid, last_assistant_item, response_start_timestamp_twilio
+            nonlocal stream_sid, last_assistant_item, response_start_timestamp_twilio, name, activate_registration
             try:
                 async for openai_message in openai_ws:
                     response = json.loads(openai_message)
@@ -257,7 +309,13 @@ async def handle_media_stream(websocket: WebSocket):
                                                             user = await create_user(transcript_data["data"], db)
                                                             print(f"Successfully processed user information: {transcript_data['operation']}")
                                                         else:
-                                                            await create_conversation_context(transcript_data["data"], db)
+                                                            print("Updating started")
+                                                            user = await update_user("679f0e88fe70e4ec01ca2cf2", transcript_data["data"],db)
+                                                    if transcript_data["operation"] == "save":
+                                                        print("initialise converstion")
+                                                        name = transcript_data["data"]["name"]
+                                                        activate_registration = True
+                                                        #await create_conversation_context(transcript_data["data"], db)
                                                     if transcript_data["operation"] == "search":
                                                         print(f"Searching for user information: {transcript_data['data']}")
                                                         user = await get_user(transcript_data["data"]["name"], db)
@@ -354,6 +412,8 @@ async def handle_media_stream(websocket: WebSocket):
 
 async def send_initial_conversation_item(openai_ws):
     """Send initial conversation item if AI talks first."""
+
+    
     initial_conversation_item = {
         "type": "conversation.item.create",
         "item": {
@@ -373,6 +433,9 @@ async def send_initial_conversation_item(openai_ws):
 
 async def initialize_session(openai_ws):
     """Control initial session with OpenAI."""
+    temp = await get_user_data()
+    SYSTEM_MESSAGE = build_system_message(temp)
+    print(SYSTEM_MESSAGE)
     session_update = {
         "type": "session.update",
         "session": {
