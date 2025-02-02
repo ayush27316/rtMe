@@ -31,7 +31,7 @@ async def test_crud_operations():
     print_separator()
 
     # Close the database connection
-    close_db_connection(db)
+    client.close()
     print("Database connection closed.")
     print_separator()
 

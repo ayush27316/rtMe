@@ -51,6 +51,20 @@ async def update_user(user_id: str, data: str, db):
         print(f"An error occurred: {e}")
         return 0
 
+async def update_name(doc_id: str, new_name: str, db):
+    """
+    Update the 'name' field of a document.
+    """
+    try:
+        result = await db["users"].update_one(
+            {"_id": ObjectId(doc_id)},
+            {"$set": {"name": new_name}}  # Sets 'name' to 'new_name'
+        )
+        return result.modified_count  # Returns the number of modified documents
+    except Exception as e:
+        print(f"An error occurred: {e}")
+        return 0
+
 async def get_user(userid: str, db):
     """
     Retrieve the context of a user.

@@ -20,7 +20,7 @@ from mongoDB_connection import (
     close_db_connection,
     get_user,
     update_user,
-    create_conversation_context,  # Add this line
+    update_name,
     update_conversation_context,
     get_conversation_context
 ) 
@@ -315,6 +315,7 @@ async def handle_media_stream(websocket: WebSocket):
                                                     if transcript_data["operation"] == "save":
                                                         print("initialise converstion")
                                                         name = transcript_data["data"]["name"]
+                                                        update_name("679f0e88fe70e4ec01ca2cf2", name, db)
                                                         activate_registration = True
                                                         #await create_conversation_context(transcript_data["data"], db)
                                                     if transcript_data["operation"] == "search":
