@@ -146,3 +146,41 @@ async def stable_face_endpoint(websocket: WebSocket):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
+
+import face_recognition
+import numpy as np
+from PIL import Image
+
+def compare_faces(image1_path, image2_path):
+    """
+    Compare two face images using face_recognition library
+    Args:
+        image1_path: Path to first image
+        image2_path: Path to second image
+    Returns:
+        float: Distance between faces (lower means more similar)
+    """
+    # Load images
+    image1 = face_recognition.load_image_file(image1_path)
+    image2 = face_recognition.load_image_file(image2_path)
+    
+    # Get face encodings
+    face_encodings1 = face_recognition.face_encodings(image1)
+    face_encodings2 = face_recognition.face_encodings(image2)
+    
+    if not face_encodings1 or not face_encodings2:
+        raise ValueError("No faces found in one or both images")
+    
+    # Calculate distance between faces
+    distance = face_recognition.face_distance([face_encodings1[0]], face_encodings2[0])[0]
+    
+    # Convert distance to similarity score (0-1)
+    similarity = 1 - distance
+    
+    if similarity > 0.6:
+        return True
+    else:
+        return False
+
+
+
