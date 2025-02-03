@@ -26,7 +26,7 @@ from mongoDB_connection import (
 ) 
 
 import assemblyai as aai
-aai.settings.api_key = "6897ea66a618490eace0f7e38c25fc15"
+aai.settings.api_key = "aai_API_KEY"s
 load_dotenv()
 
 MONGO_URI = os.getenv('MONGO_URI')
